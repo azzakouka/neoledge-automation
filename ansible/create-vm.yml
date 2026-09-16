@@ -1,0 +1,59 @@
+- name: Commander une VM Neoledge
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    vm_disk: 30Gi
+  tasks:
+    - name: Vérifier le nom de la VM
+      ansible.builtin.assert:
+        that:
+          - vm_name is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+        fail_msg: "Nom invalide : minuscules, chiffres et tirets uniquement"
+
+    - name: Créer la VM
+      kubevirt.core.kubevirt_vm:
+        state: present
+        name: "{{ vm_name }}"
+        namespace: neoledge
+        labels:
+          app: neo-app
+          managed-by: aap
+          requested-by: "{{ awx_user_name | default('unknown') }}"
+        instancetype:
+          name: "{{ vm_size }}"
+        preference:
+          inferFromVolume: rootdisk
+        data_volume_templates:
+          - metadata:
+              name: "{{ vm_name }}-root"
+            spec:
+              sourceRef:
+                kind: DataSource
+                name: "{{ vm_os }}"
+                namespace: openshift-virtualization-os-images
+              storage:
+                resources:
+                  requests:
+                    storage: "{{ vm_disk }}"
+        spec:
+          domain:
+            devices: {}
+          volumes:
+            - name: rootdisk
+              dataVolume:
+                name: "{{ vm_name }}-root"
+            - name: cloudinit
+              cloudInitNoCloud:
+                userData: |
+                  #cloud-config
+                  user: neoadmin
+                  ssh_authorized_keys:
+                    - {{ ssh_pub_key }}
+        run_strategy: Always
+        wait: true
+        wait_timeout: 900
+
+    - name: Résultat
+      ansible.builtin.debug:
+        msg: "VM {{ vm_name }} ({{ vm_size }}, {{ vm_os }}) créée dans neoledge"
