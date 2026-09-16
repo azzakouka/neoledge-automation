@@ -7,11 +7,9 @@ terraform {
   }
 
   backend "kubernetes" {
-    secret_suffix     = "neoledge-vms"
-    namespace         = "neoledge"
-    in_cluster_config = true
+    secret_suffix = "neoledge-vms"
+    namespace     = "neoledge"
   }
 }
 
-# Sans paramètre : le provider utilise le ServiceAccount du pod
 provider "kubernetes" {}
