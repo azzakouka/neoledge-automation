@@ -1,0 +1,76 @@
+- name: Piloter les VMs Neoledge avec Terraform
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    tf_version: "1.9.8"
+    tf_bin_dir: /tmp/terraform-bin
+    tf_project: "{{ playbook_dir }}/../terraform"
+  environment:
+    # Connexion à OpenShift : issue du credential neoledge-ocp
+    KUBE_HOST: "{{ lookup('ansible.builtin.env', 'K8S_AUTH_HOST') }}"
+    KUBE_TOKEN: "{{ lookup('ansible.builtin.env', 'K8S_AUTH_API_KEY') }}"
+    KUBE_CLUSTER_CA_CERT_DATA: "{{ lookup('ansible.builtin.file', lookup('ansible.builtin.env', 'K8S_AUTH_SSL_CA_CERT')) }}"
+    # Variables Terraform : issues du Survey
+    TF_VAR_vm_prefix: "{{ vm_prefix }}"
+    TF_VAR_vm_count: "{{ vm_count }}"
+    TF_VAR_vm_size: "{{ vm_size }}"
+    TF_VAR_vm_os: "{{ vm_os }}"
+    TF_VAR_vm_disk: "{{ vm_disk }}"
+    TF_VAR_ssh_pub_key: "{{ ssh_pub_key }}"
+    TF_IN_AUTOMATION: "true"
+    HOME: /tmp
+  tasks:
+    - name: Préparer le répertoire du binaire
+      ansible.builtin.file:
+        path: "{{ tf_bin_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Télécharger Terraform
+      ansible.builtin.get_url:
+        url: "https://releases.hashicorp.com/terraform/{{ tf_version }}/terraform_{{ tf_version }}_linux_amd64.zip"
+        dest: /tmp/terraform.zip
+        mode: "0644"
+
+    - name: Décompresser Terraform
+      ansible.builtin.command:
+        cmd: >-
+          python3 -c "import zipfile; zipfile.ZipFile('/tmp/terraform.zip').extractall('{{ tf_bin_dir }}')"
+        creates: "{{ tf_bin_dir }}/terraform"
+
+    - name: Rendre le binaire exécutable
+      ansible.builtin.file:
+        path: "{{ tf_bin_dir }}/terraform"
+        mode: "0755"
+
+    - name: terraform init
+      ansible.builtin.command:
+        cmd: "{{ tf_bin_dir }}/terraform init -input=false -no-color"
+        chdir: "{{ tf_project }}"
+      changed_when: false
+
+    - name: terraform plan (aperçu des changements)
+      ansible.builtin.command:
+        cmd: "{{ tf_bin_dir }}/terraform plan -input=false -no-color {{ '-destroy' if tf_action == 'destroy' else '' }}"
+        chdir: "{{ tf_project }}"
+      register: tf_plan
+      changed_when: false
+
+    - name: Afficher le plan
+      ansible.builtin.debug:
+        var: tf_plan.stdout_lines
+
+    - name: terraform apply / destroy
+      cloud.terraform.terraform:
+        project_path: "{{ tf_project }}"
+        binary_path: "{{ tf_bin_dir }}/terraform"
+        state: "{{ 'absent' if tf_action == 'destroy' else 'present' }}"
+      when: tf_action in ['apply', 'destroy']
+      register: tf_result
+
+    - name: Résultat
+      ansible.builtin.debug:
+        msg: >-
+          Action {{ tf_action }} terminée.
+          {{ tf_result.outputs.vms.value | default([]) | join(', ') if tf_action == 'apply' else '' }}
