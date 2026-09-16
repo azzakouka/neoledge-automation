@@ -1,24 +1,37 @@
-- name: Commander une VM Neoledge
+- name: Commander une ou plusieurs VMs Neoledge
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
     vm_disk: 30Gi
+    vm_count: 1
   tasks:
-    - name: Vérifier le nom de la VM
+    - name: Vérifier les paramètres
       ansible.builtin.assert:
         that:
           - vm_name is match('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
-        fail_msg: "Nom invalide : minuscules, chiffres et tirets uniquement"
+          - vm_name | length <= 40
+          - vm_count | int >= 1
+          - vm_count | int <= 10
+        fail_msg: "Préfixe invalide (minuscules, chiffres, tirets) ou nombre de VMs hors limites (1 à 10)"
 
-    - name: Créer la VM
+    - name: Calculer la liste des noms
+      ansible.builtin.set_fact:
+        vm_names: "{{ query('ansible.builtin.sequence', 'start=1 end=' ~ (vm_count | int) ~ ' format=' ~ vm_name ~ '-%02d') }}"
+
+    - name: Afficher les VMs demandées
+      ansible.builtin.debug:
+        msg: "Création de {{ vm_names | length }} VM(s) : {{ vm_names | join(', ') }}"
+
+    - name: Créer les VMs (sans attendre)
       kubevirt.core.kubevirt_vm:
         state: present
-        name: "{{ vm_name }}"
+        name: "{{ item }}"
         namespace: neoledge
         labels:
           app: neo-app
           managed-by: aap
+          batch: "{{ vm_name }}"
           requested-by: "{{ awx_user_name | default('unknown') }}"
         instancetype:
           name: "{{ vm_size }}"
@@ -26,7 +39,7 @@
           inferFromVolume: rootdisk
         data_volume_templates:
           - metadata:
-              name: "{{ vm_name }}-root"
+              name: "{{ item }}-root"
             spec:
               sourceRef:
                 kind: DataSource
@@ -42,18 +55,33 @@
           volumes:
             - name: rootdisk
               dataVolume:
-                name: "{{ vm_name }}-root"
+                name: "{{ item }}-root"
             - name: cloudinit
               cloudInitNoCloud:
                 userData: |
                   #cloud-config
+                  hostname: {{ item }}
                   user: neoadmin
                   ssh_authorized_keys:
                     - {{ ssh_pub_key }}
         run_strategy: Always
-        wait: true
-        wait_timeout: 900
+        wait: false
+      loop: "{{ vm_names }}"
+
+    - name: Attendre que toutes les VMs soient prêtes
+      kubernetes.core.k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ item }}"
+        namespace: neoledge
+      register: vm_state
+      until: >-
+        vm_state.resources | length > 0 and
+        (vm_state.resources[0].status.ready | default(false))
+      retries: 90
+      delay: 10
+      loop: "{{ vm_names }}"
 
     - name: Résultat
       ansible.builtin.debug:
-        msg: "VM {{ vm_name }} ({{ vm_size }}, {{ vm_os }}) créée dans neoledge"
+        msg: "{{ vm_names | length }} VM(s) prête(s) dans neoledge : {{ vm_names | join(', ') }}"
