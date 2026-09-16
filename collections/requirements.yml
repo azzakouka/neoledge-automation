@@ -1,3 +1,4 @@
 collections:
   - name: kubevirt.core
   - name: kubernetes.core
+  - name: cloud.terraform
